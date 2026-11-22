@@ -1,0 +1,1107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>黑洞构筑体 · 3D 模型本地交互预览</title>
+  <style>
+    :root {
+      --bg-dark-1: #0b0812;
+      --bg-dark-2: #1a1226;
+      --bg-paper-1: #efeae0;
+      --bg-paper-2: #dfd7ca;
+      --panel-bg: rgba(16, 12, 24, 0.78);
+      --panel-border: rgba(216, 130, 255, 0.22);
+      --accent: #d946ef;
+      --accent-soft: rgba(217, 70, 239, 0.18);
+      --bronze: #c6865c;
+      --text-main: #f3edf7;
+      --text-dim: #a395b2;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    html, body {
+      width: 100%;
+      height: 100%;
+      overflow: hidden;
+      font-family: -apple-system, BlinkMacSystemFont, "PingFang SC", "Noto Sans SC", "Segoe UI", sans-serif;
+      background: radial-gradient(circle at 50% 42%, var(--bg-dark-2) 0%, var(--bg-dark-1) 75%);
+      color: var(--text-main);
+      user-select: none;
+    }
+    body.theme-paper {
+      background: radial-gradient(circle at 50% 42%, var(--bg-paper-1) 0%, var(--bg-paper-2) 85%);
+    }
+
+    #canvas-wrap {
+      position: fixed;
+      inset: 0;
+      z-index: 1;
+    }
+    canvas { display: block; width: 100%; height: 100%; }
+
+    /* Loading overlay */
+    #loader {
+      position: fixed;
+      inset: 0;
+      z-index: 100;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: radial-gradient(circle at center, #1b1128 0%, #09060e 80%);
+      transition: opacity 0.45s ease, visibility 0.45s ease;
+    }
+    #loader.hidden { opacity: 0; visibility: hidden; pointer-events: none; }
+    .loader-ring {
+      width: 64px;
+      height: 64px;
+      border-radius: 50%;
+      border: 3px solid rgba(217, 70, 239, 0.18);
+      border-top-color: #e879f9;
+      box-shadow: 0 0 28px rgba(217, 70, 239, 0.45);
+      animation: spin 0.9s linear infinite;
+    }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .loader-title { font-size: 16px; font-weight: 600; letter-spacing: 2px; color: #f5e6ff; }
+    .loader-bar-wrap {
+      width: 240px;
+      height: 5px;
+      border-radius: 99px;
+      background: rgba(255, 255, 255, 0.1);
+      overflow: hidden;
+    }
+    .loader-bar {
+      width: 0%;
+      height: 100%;
+      background: linear-gradient(90deg, #9333ea, #e879f9, #f0abfc);
+      transition: width 0.15s ease;
+    }
+    .loader-sub { font-size: 12px; color: var(--text-dim); font-variant-numeric: tabular-nums; }
+
+    /* Top Header HUD */
+    .hud-header {
+      position: fixed;
+      top: 16px;
+      left: 18px;
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      padding: 11px 16px;
+      border-radius: 14px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+    }
+    .brand-dot {
+      width: 14px;
+      height: 14px;
+      border-radius: 50%;
+      background: radial-gradient(circle, #000 38%, #c026d3 72%, #f0abfc 100%);
+      box-shadow: 0 0 14px #d946ef;
+      flex-shrink: 0;
+    }
+    .title-group h1 {
+      font-size: 15px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: #fff;
+      line-height: 1.25;
+    }
+    .title-group p {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 2px;
+      letter-spacing: 0.4px;
+    }
+
+    /* Right Control Panel */
+    .hud-controls {
+      position: fixed;
+      top: 16px;
+      right: 18px;
+      z-index: 20;
+      width: 264px;
+      max-height: calc(100vh - 110px);
+      overflow-y: auto;
+      padding: 14px;
+      border-radius: 14px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      box-shadow: 0 12px 36px rgba(0, 0, 0, 0.38);
+      display: flex;
+      flex-direction: column;
+      gap: 12px;
+    }
+    .hud-controls.collapsed .panel-body { display: none; }
+    .panel-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      cursor: pointer;
+    }
+    .panel-head span {
+      font-size: 12px;
+      font-weight: 700;
+      letter-spacing: 1px;
+      color: #e9d5ff;
+      text-transform: uppercase;
+    }
+    .panel-head button {
+      background: transparent;
+      border: none;
+      color: var(--text-dim);
+      font-size: 14px;
+      cursor: pointer;
+      padding: 2px 6px;
+      border-radius: 6px;
+    }
+    .panel-head button:hover { color: #fff; background: rgba(255,255,255,0.08); }
+
+    .panel-body { display: flex; flex-direction: column; gap: 12px; }
+
+    .ctrl-section {
+      display: flex;
+      flex-direction: column;
+      gap: 6px;
+      padding-top: 8px;
+      border-top: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .ctrl-label {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-dim);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .ctrl-label .val { color: #f0abfc; font-variant-numeric: tabular-nums; }
+
+    .seg-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 5px;
+    }
+    .btn-chip {
+      padding: 6px 8px;
+      font-size: 11.5px;
+      font-weight: 500;
+      border-radius: 8px;
+      border: 1px solid rgba(255, 255, 255, 0.11);
+      background: rgba(255, 255, 255, 0.04);
+      color: #ddd4e6;
+      cursor: pointer;
+      transition: all 0.18s ease;
+      text-align: center;
+    }
+    .btn-chip:hover {
+      background: rgba(217, 70, 239, 0.16);
+      border-color: rgba(217, 70, 239, 0.45);
+      color: #fff;
+    }
+    .btn-chip.active {
+      background: linear-gradient(135deg, rgba(168, 85, 247, 0.42), rgba(217, 70, 239, 0.38));
+      border-color: #e879f9;
+      color: #fff;
+      box-shadow: 0 0 12px rgba(217, 70, 239, 0.28);
+    }
+
+    input[type="range"] {
+      -webkit-appearance: none;
+      width: 100%;
+      height: 4px;
+      border-radius: 99px;
+      background: rgba(255, 255, 255, 0.14);
+      outline: none;
+    }
+    input[type="range"]::-webkit-slider-thumb {
+      -webkit-appearance: none;
+      width: 13px;
+      height: 13px;
+      border-radius: 50%;
+      background: #e879f9;
+      border: 2px solid #fff;
+      cursor: pointer;
+      box-shadow: 0 0 8px rgba(217, 70, 239, 0.7);
+    }
+
+    .spec-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 5px;
+      font-size: 11px;
+    }
+    .spec-item {
+      padding: 5px 7px;
+      border-radius: 7px;
+      background: rgba(255, 255, 255, 0.04);
+      border: 1px solid rgba(255, 255, 255, 0.06);
+    }
+    .spec-item .k { color: var(--text-dim); font-size: 10px; display: block; }
+    .spec-item .v { color: #f6ecff; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+    /* Bottom 6-View Camera Dock */
+    .hud-dock {
+      position: fixed;
+      bottom: 18px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 20;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 7px 10px;
+      border-radius: 16px;
+      background: var(--panel-bg);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(14px);
+      -webkit-backdrop-filter: blur(14px);
+      box-shadow: 0 14px 38px rgba(0, 0, 0, 0.42);
+      flex-wrap: nowrap;
+      max-width: calc(100vw - 24px);
+      overflow-x: auto;
+    }
+    .dock-sep {
+      width: 1px;
+      height: 22px;
+      background: rgba(255, 255, 255, 0.14);
+      margin: 0 3px;
+      flex-shrink: 0;
+    }
+    .view-btn {
+      padding: 7px 12px;
+      font-size: 12px;
+      font-weight: 600;
+      border-radius: 10px;
+      border: 1px solid transparent;
+      background: transparent;
+      color: #d8cde3;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: all 0.18s ease;
+    }
+    .view-btn:hover {
+      background: rgba(255, 255, 255, 0.08);
+      color: #fff;
+    }
+    .view-btn.active {
+      background: linear-gradient(135deg, rgba(168, 85, 247, 0.45), rgba(217, 70, 239, 0.42));
+      border-color: rgba(232, 121, 249, 0.75);
+      color: #fff;
+      box-shadow: 0 0 14px rgba(217, 70, 239, 0.35);
+    }
+
+    /* Reference Blueprint PiP Card */
+    .ref-card {
+      position: fixed;
+      left: 18px;
+      bottom: 82px;
+      z-index: 22;
+      width: 340px;
+      border-radius: 14px;
+      overflow: hidden;
+      background: rgba(16, 12, 24, 0.88);
+      border: 1px solid var(--panel-border);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5);
+      transition: transform 0.25s ease, opacity 0.25s ease;
+    }
+    .ref-card.hidden {
+      opacity: 0;
+      transform: translateY(16px) scale(0.96);
+      pointer-events: none;
+    }
+    .ref-card.expanded {
+      width: min(760px, calc(100vw - 36px));
+    }
+    .ref-card-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      font-size: 11.5px;
+      font-weight: 600;
+      color: #e9d5ff;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    }
+    .ref-card-head .actions { display: flex; gap: 6px; }
+    .ref-card-head button {
+      background: rgba(255, 255, 255, 0.08);
+      border: none;
+      color: #ddd;
+      font-size: 11px;
+      padding: 3px 7px;
+      border-radius: 6px;
+      cursor: pointer;
+    }
+    .ref-card-head button:hover { background: rgba(217, 70, 239, 0.35); color: #fff; }
+    .ref-card img {
+      display: block;
+      width: 100%;
+      height: auto;
+    }
+
+    /* 3D Projected Dimension Callout Labels */
+    #labels-layer {
+      position: fixed;
+      inset: 0;
+      z-index: 10;
+      pointer-events: none;
+      overflow: hidden;
+    }
+    #labels-layer.hidden { display: none; }
+    .dim-tag {
+      position: absolute;
+      transform: translate(-50%, -50%);
+      padding: 3px 8px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      white-space: nowrap;
+      color: #fdf4ff;
+      background: rgba(18, 12, 28, 0.84);
+      border: 1px solid rgba(232, 121, 249, 0.55);
+      box-shadow: 0 4px 14px rgba(0, 0, 0, 0.35);
+      letter-spacing: 0.3px;
+    }
+    .dim-tag.bronze {
+      border-color: rgba(214, 152, 108, 0.65);
+      color: #ffebd8;
+    }
+
+    .hint-bar {
+      position: fixed;
+      left: 18px;
+      bottom: 18px;
+      z-index: 15;
+      font-size: 11px;
+      color: rgba(210, 198, 224, 0.65);
+      background: rgba(14, 10, 22, 0.52);
+      padding: 6px 10px;
+      border-radius: 8px;
+      backdrop-filter: blur(8px);
+    }
+    body.theme-paper .hint-bar {
+      color: rgba(45, 36, 48, 0.78);
+      background: rgba(255, 250, 242, 0.72);
+    }
+    @media (max-width: 980px) {
+      .hint-bar { display: none; }
+      .hud-controls { width: 230px; }
+    }
+  </style>
+</head>
+<body>
+  <!-- Loading Screen -->
+  <div id="loader">
+    <div class="loader-ring"></div>
+    <div class="loader-title">黑洞构筑体 · 3D 模型加载中</div>
+    <div class="loader-bar-wrap"><div class="loader-bar" id="loader-bar"></div></div>
+    <div class="loader-sub" id="loader-sub">正在载入 4K PBR 烘焙高精度网格 (100 × 48 × 120 m)...</div>
+  </div>
+
+  <!-- 3D Viewport -->
+  <div id="canvas-wrap"></div>
+
+  <!-- 3D Dimension Labels Layer -->
+  <div id="labels-layer"></div>
+
+  <!-- Header Badge -->
+  <div class="hud-header">
+    <div class="brand-dot"></div>
+    <div class="title-group">
+      <h1>黑洞构筑体 · Black Hole Construct</h1>
+      <p>100 × 48 × 120 m · 洞口 Ø40m / 黑核 Ø26m / 凹深 18m · Blender PBR 烘焙</p>
+    </div>
+  </div>
+
+  <!-- Right Control Panel -->
+  <aside class="hud-controls" id="ctrl-panel">
+    <div class="panel-head" id="panel-toggle">
+      <span>检视控制台</span>
+      <button type="button" title="折叠/展开">▾</button>
+    </div>
+    <div class="panel-body">
+      <div class="ctrl-section" style="padding-top:2px; border-top:none;">
+        <div class="ctrl-label">渲染模式</div>
+        <div class="seg-grid">
+          <button class="btn-chip active" data-render="pbr">PBR 材质</button>
+          <button class="btn-chip" data-render="wire-over">线框叠加</button>
+          <button class="btn-chip" data-render="clay">素模白模</button>
+          <button class="btn-chip" data-render="wire">纯线框</button>
+        </div>
+      </div>
+
+      <div class="ctrl-section">
+        <div class="ctrl-label">摄影棚背景与投影</div>
+        <div class="seg-grid">
+          <button class="btn-chip active" data-theme="dark">宇宙暗棚</button>
+          <button class="btn-chip" data-theme="paper">图纸米白</button>
+          <button class="btn-chip active" id="btn-proj-persp">透视投影</button>
+          <button class="btn-chip" id="btn-proj-ortho">正交投影</button>
+        </div>
+      </div>
+
+      <div class="ctrl-section">
+        <div class="ctrl-label">辅助工具</div>
+        <div class="seg-grid">
+          <button class="btn-chip active" id="btn-dims">尺寸标注</button>
+          <button class="btn-chip" id="btn-ref">六视图对比</button>
+          <button class="btn-chip" id="btn-spin">自动旋转</button>
+          <button class="btn-chip" id="btn-reset">重置视角</button>
+        </div>
+      </div>
+
+      <div class="ctrl-section">
+        <div class="ctrl-label"><span>洞口紫光辉光 (Bloom)</span><span class="val" id="val-bloom">0.38</span></div>
+        <input type="range" id="rng-bloom" min="0" max="1.6" step="0.02" value="0.38" />
+
+        <div class="ctrl-label" style="margin-top:4px;"><span>画面曝光 (Exposure)</span><span class="val" id="val-exp">1.15</span></div>
+        <input type="range" id="rng-exp" min="0.5" max="2.2" step="0.02" value="1.15" />
+
+        <div class="ctrl-label" style="margin-top:4px;"><span>主光角度 (Light Yaw)</span><span class="val" id="val-light">35°</span></div>
+        <input type="range" id="rng-light" min="0" max="360" step="1" value="35" />
+      </div>
+
+      <div class="ctrl-section">
+        <div class="ctrl-label">模型规格实测</div>
+        <div class="spec-grid">
+          <div class="spec-item"><span class="k">总包围盒 (X×Y×Z)</span><span class="v" id="stat-bbox">100×48×120 m</span></div>
+          <div class="spec-item"><span class="k">文件体积 / 压缩</span><span class="v" id="stat-size">14.2 MB · Draco</span></div>
+          <div class="spec-item"><span class="k">三角面数</span><span class="v" id="stat-tris">--</span></div>
+          <div class="spec-item"><span class="k">PBR 贴图</span><span class="v" id="stat-tex">双套 4K WebP</span></div>
+        </div>
+      </div>
+    </div>
+  </aside>
+
+  <!-- Collapsible 6-View Reference Image Card -->
+  <div class="ref-card hidden" id="ref-card">
+    <div class="ref-card-head">
+      <span>原始六视图尺寸参考</span>
+      <div class="actions">
+        <button id="ref-expand">放大/缩小</button>
+        <button id="ref-close">关闭</button>
+      </div>
+    </div>
+    <img src="./assets/reference_6view.jpg" alt="黑洞构筑体六视图参考" />
+  </div>
+
+  <!-- Bottom 6-View Camera Preset Bar -->
+  <nav class="hud-dock" id="view-dock">
+    <button class="view-btn active" data-view="axon">正交轴测</button>
+    <div class="dock-sep"></div>
+    <button class="view-btn" data-view="front">正立面 FRONT</button>
+    <button class="view-btn" data-view="rear">背立面 REAR</button>
+    <button class="view-btn" data-view="left">左立面 LEFT</button>
+    <button class="view-btn" data-view="right">右立面 RIGHT</button>
+    <button class="view-btn" data-view="top">俯视图 TOP</button>
+  </nav>
+
+  <div class="hint-bar">左键旋转 · 右键平移 · 滚轮缩放 · 快捷键 1~6 切换六视图</div>
+
+  <script type="importmap">
+    {
+      "imports": {
+        "three": "./vendor/three/build/three.module.js",
+        "three/addons/": "./vendor/three/examples/jsm/"
+      }
+    }
+  </script>
+
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+    import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
+    import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+    import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+    import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+    import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+    import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
+
+    // -------------------------------------------------------------------------
+    // 1. Renderer, Scene & Cameras (Perspective + Orthographic)
+    // -------------------------------------------------------------------------
+    const container = document.getElementById('canvas-wrap');
+    const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.setSize(window.innerWidth, window.innerHeight);
+    renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1.15;
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    container.appendChild(renderer.domElement);
+
+    const scene = new THREE.Scene();
+
+    // Procedural Studio IBL Environment (balanced so dark volcanic obsidian stays deep & dramatic!)
+    const pmrem = new THREE.PMREMGenerator(renderer);
+    scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+    scene.environmentIntensity = 0.56;
+
+    const aspect = window.innerWidth / window.innerHeight;
+    const perspCam = new THREE.PerspectiveCamera(36, aspect, 1, 2500);
+    const orthoHalfH = 82;
+    const orthoCam = new THREE.OrthographicCamera(
+      -orthoHalfH * aspect, orthoHalfH * aspect, orthoHalfH, -orthoHalfH, -1000, 2500
+    );
+    let activeCam = perspCam;
+    let isOrtho = false;
+
+    const CENTER = new THREE.Vector3(0, 60, 0);
+    perspCam.position.set(-168, 138, 236);
+    orthoCam.position.copy(perspCam.position);
+
+    const controls = new OrbitControls(activeCam, renderer.domElement);
+    controls.enableDamping = true;
+    controls.dampingFactor = 0.065;
+    controls.target.copy(CENTER);
+    controls.minDistance = 30;
+    controls.maxDistance = 650;
+    controls.autoRotate = false;
+    controls.autoRotateSpeed = 0.85;
+    controls.update();
+
+    // -------------------------------------------------------------------------
+    // 2. Post-Processing Pipeline (Crisp tight bloom — ZERO pastel washout!)
+    // -------------------------------------------------------------------------
+    const composer = new EffectComposer(renderer);
+    const renderPass = new RenderPass(scene, activeCam);
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(window.innerWidth, window.innerHeight),
+      0.38,  // strength: crisp tight cosmic aura
+      0.32,  // radius: sharp localized halo around energy cracks
+      0.48   // threshold: ONLY hot magenta energy cores bloom!
+    );
+    const outputPass = new OutputPass();
+    composer.addPass(renderPass);
+    composer.addPass(bloomPass);
+    composer.addPass(outputPass);
+
+    // -------------------------------------------------------------------------
+    // 3. Sculptural Studio Lighting Rig (tuned for dark obsidian + warm copper edge catchlights)
+    // -------------------------------------------------------------------------
+    const lightRig = new THREE.Group();
+    scene.add(lightRig);
+
+    const hemiLight = new THREE.HemisphereLight(0xeee0ff, 0x1d111a, 0.42);
+    scene.add(hemiLight);
+
+    const keyLight = new THREE.DirectionalLight(0xffebd6, 2.55);
+    keyLight.position.set(115, 165, 145);
+    lightRig.add(keyLight);
+
+    const fillLight = new THREE.DirectionalLight(0xcab6ff, 0.92);
+    fillLight.position.set(-135, 85, 105);
+    lightRig.add(fillLight);
+
+    const rimLight = new THREE.DirectionalLight(0xffcaa6, 2.15);
+    rimLight.position.set(-70, 155, -145);
+    lightRig.add(rimLight);
+
+    const rearFill = new THREE.DirectionalLight(0xede0f5, 1.25);
+    rearFill.position.set(95, 60, -140);
+    lightRig.add(rearFill);
+
+    // Subtle localized magenta fill right inside the recessed crater funnel
+    const craterLight = new THREE.PointLight(0xd91ef2, 950, 72, 1.9);
+    craterLight.position.set(-2, 58, 16);
+    scene.add(craterLight);
+
+    // Ground Grid (Z=0 plane in Blender -> Y=0 in glTF)
+    const gridHelper = new THREE.GridHelper(220, 22, 0x8b5cf6, 0x3b2a4f);
+    gridHelper.position.y = -0.05;
+    gridHelper.material.opacity = 0.28;
+    gridHelper.material.transparent = true;
+    scene.add(gridHelper);
+
+    // -------------------------------------------------------------------------
+    // 4. 3D Blueprint Dimension Guides (100x48x120m box, Ø40m/Ø26m rings, 18m depth)
+    // -------------------------------------------------------------------------
+    const dimsGroup = new THREE.Group();
+    scene.add(dimsGroup);
+
+    // Bounding Box wireframe (100 x 120 x 48 in X, Y_up, Z_depth)
+    const boxGeom = new THREE.BoxGeometry(100, 120, 48);
+    const boxEdges = new THREE.EdgesGeometry(boxGeom);
+    const boxLines = new THREE.LineSegments(
+      boxEdges,
+      new THREE.LineDashedMaterial({ color: 0xc084fc, dashSize: 2.6, gapSize: 1.8, opacity: 0.55, transparent: true })
+    );
+    boxLines.computeLineDistances();
+    boxLines.position.set(0, 60, 0);
+    dimsGroup.add(boxLines);
+
+    // Ø40m Outer Crater Ring & Ø26m Inner Void Ring at Y_up = +58 m
+    function makeCircleRing(radius, zPos, color, opacity = 0.85) {
+      const pts = [];
+      for (let i = 0; i <= 96; i++) {
+        const a = (i / 96) * Math.PI * 2;
+        pts.push(new THREE.Vector3(-2 + Math.cos(a) * radius, 58 + Math.sin(a) * radius, zPos));
+      }
+      const g = new THREE.BufferGeometry().setFromPoints(pts);
+      return new THREE.Line(g, new THREE.LineBasicMaterial({ color, opacity, transparent: true }));
+    }
+    dimsGroup.add(makeCircleRing(20.0, 22.5, 0xf0abfc, 0.88)); // Ø40 m crater rim
+    dimsGroup.add(makeCircleRing(13.0, 4.5,  0xe879f9, 0.88)); // Ø26 m inner void
+
+    // 18m Cavity Recess Depth axis line (from Z = 22.5 inward to Z = 4.5 at X=-2, Y=58)
+    const depthPts = [
+      new THREE.Vector3(-2, 58, 22.5),
+      new THREE.Vector3(-2, 58, 4.5)
+    ];
+    const depthLine = new THREE.Line(
+      new THREE.BufferGeometry().setFromPoints(depthPts),
+      new THREE.LineBasicMaterial({ color: 0xf59e0b, opacity: 0.9, transparent: true })
+    );
+    dimsGroup.add(depthLine);
+
+    // Origin Marker (0, 0, 0) + XYZ Axes
+    const axesHelper = new THREE.AxesHelper(16);
+    axesHelper.position.set(-56, 0, 28);
+    dimsGroup.add(axesHelper);
+
+    // Floating 3D-projected HTML dimension callouts
+    const labelsLayer = document.getElementById('labels-layer');
+    const dimCallouts = [
+      { text: '总高 120 m', pos: new THREE.Vector3(-56, 60, 24), cls: 'bronze' },
+      { text: '总宽 100 m', pos: new THREE.Vector3(0, -6, 26), cls: 'bronze' },
+      { text: '总深 48 m', pos: new THREE.Vector3(56, 4, 0), cls: 'bronze' },
+      { text: '洞口外径 Ø40 m', pos: new THREE.Vector3(21, 74, 24), cls: '' },
+      { text: '黑核内径 Ø26 m · 标高 +58 m', pos: new THREE.Vector3(-2, 58, 6), cls: '' },
+      { text: '洞口凹入深度 18 m', pos: new THREE.Vector3(-2, 58, 14), cls: '' },
+      { text: 'Z = 0 原点 (底面中心)', pos: new THREE.Vector3(0, 0, 0), cls: 'bronze' },
+    ];
+    const calloutEls = dimCallouts.map((c) => {
+      const el = document.createElement('div');
+      el.className = `dim-tag ${c.cls}`;
+      el.textContent = c.text;
+      labelsLayer.appendChild(el);
+      return { ...c, el };
+    });
+
+    function updateProjectedLabels() {
+      if (labelsLayer.classList.contains('hidden')) return;
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const v = new THREE.Vector3();
+      for (const item of calloutEls) {
+        v.copy(item.pos).project(activeCam);
+        if (v.z > 1) {
+          item.el.style.display = 'none';
+          continue;
+        }
+        item.el.style.display = 'block';
+        item.el.style.left = `${(v.x * 0.5 + 0.5) * w}px`;
+        item.el.style.top  = `${(-v.y * 0.5 + 0.5) * h}px`;
+      }
+    }
+
+    // -------------------------------------------------------------------------
+    // 5. Load Baked PBR GLB Model + Display Modes
+    // -------------------------------------------------------------------------
+    const loaderEl = document.getElementById('loader');
+    const loaderBar = document.getElementById('loader-bar');
+    const loaderSub = document.getElementById('loader-sub');
+
+    let modelRoot = null;
+    const originalMats = new Map();
+    const wireframeOverlays = [];
+    const clayMat = new THREE.MeshStandardMaterial({
+      color: 0xd8d0c8,
+      roughness: 0.72,
+      metalness: 0.05,
+    });
+    const pureWireMat = new THREE.MeshBasicMaterial({
+      color: 0xd8b4fe,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.55,
+    });
+    const overlayWireMat = new THREE.MeshBasicMaterial({
+      color: 0xe879f9,
+      wireframe: true,
+      transparent: true,
+      opacity: 0.14,
+      depthWrite: false,
+    });
+
+    const gltfLoader = new GLTFLoader();
+    const dracoLoader = new DRACOLoader();
+    dracoLoader.setDecoderPath('./vendor/three/examples/jsm/libs/draco/gltf/');
+    gltfLoader.setDRACOLoader(dracoLoader);
+
+    const MODEL_CATALOG = {
+      draco200k: {
+        url: './assets/black_hole_construct_draco200k.glb?v=7',
+        sizeLabel: '14.2 MB · Draco L10',
+        texLabel: '双套 4K WebP (高烘低)',
+        loadingLabel: '正在载入 14.5万面 Draco 4K 压缩模型...',
+      },
+      master740k: {
+        url: './assets/black_hole_construct_master.glb?v=7',
+        sizeLabel: '65.2 MB · 无损母版',
+        texLabel: '双套 4K PNG 法线',
+        loadingLabel: '正在载入 74万面高清无损母版...',
+      },
+    };
+    let currentRenderMode = 'pbr';
+
+    function disposeCurrentModel() {
+      if (!modelRoot) return;
+      scene.remove(modelRoot);
+      modelRoot.traverse((obj) => {
+        if (!obj.isMesh) return;
+        obj.geometry?.dispose();
+        const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+        mats.forEach((m) => {
+          if (!m || m === clayMat || m === pureWireMat || m === overlayWireMat) return;
+          for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap']) {
+            m[k]?.dispose();
+          }
+          m.dispose();
+        });
+      });
+      originalMats.clear();
+      wireframeOverlays.length = 0;
+      modelRoot = null;
+    }
+
+    function applyRenderMode(mode) {
+      currentRenderMode = mode;
+      if (!modelRoot) return;
+      modelRoot.traverse((obj) => {
+        if (!obj.isMesh || !originalMats.has(obj)) return;
+        if (mode === 'pbr' || mode === 'wire-over') {
+          obj.material = originalMats.get(obj);
+        } else if (mode === 'clay') {
+          obj.material = clayMat;
+        } else if (mode === 'wire') {
+          obj.material = pureWireMat;
+        }
+      });
+      wireframeOverlays.forEach((w) => { w.visible = (mode === 'wire-over'); });
+      bloomPass.strength = (mode === 'clay' || mode === 'wire') ? 0.0 : parseFloat(rngBloom.value);
+    }
+
+    function loadModelVariant(key) {
+      const cfg = MODEL_CATALOG[key];
+      if (!cfg) return;
+      loaderEl.classList.remove('hidden');
+      loaderBar.style.width = '5%';
+      loaderSub.textContent = cfg.loadingLabel;
+
+      document.querySelectorAll('[data-model]').forEach((b) => {
+        b.classList.toggle('active', b.dataset.model === key);
+      });
+
+      gltfLoader.load(
+        cfg.url,
+        (gltf) => {
+          disposeCurrentModel();
+          modelRoot = gltf.scene;
+          let totalTris = 0;
+
+          const meshes = [];
+          modelRoot.traverse((obj) => {
+            if (obj.isMesh) meshes.push(obj);
+          });
+
+          const maxAniso = renderer.capabilities.getMaxAnisotropy();
+          for (const obj of meshes) {
+            const geom = obj.geometry;
+            totalTris += geom.index ? geom.index.count / 3 : geom.attributes.position.count / 3;
+
+            const mats = Array.isArray(obj.material) ? obj.material : [obj.material];
+            mats.forEach((m) => {
+              if (!m) return;
+              for (const k of ['map', 'normalMap', 'roughnessMap', 'metalnessMap', 'emissiveMap']) {
+                if (m[k]) m[k].anisotropy = maxAniso;
+              }
+              if (m.name && m.name.includes('EventHorizon')) {
+                m.color?.setRGB(0, 0, 0);
+                if ('roughness' in m) m.roughness = 1.0;
+                if ('metalness' in m) m.metalness = 0.0;
+                if ('envMapIntensity' in m) m.envMapIntensity = 0.0;
+              } else {
+                if (m.normalScale) m.normalScale.set(0.95, 0.95);
+                if (m.emissiveMap) {
+                  m.emissiveIntensity = 2.65;
+                }
+              }
+            });
+            originalMats.set(obj, obj.material);
+
+            const wireClone = new THREE.Mesh(geom, overlayWireMat);
+            wireClone.visible = false;
+            obj.add(wireClone);
+            wireframeOverlays.push(wireClone);
+          }
+
+          scene.add(modelRoot);
+          applyRenderMode(currentRenderMode);
+
+          const box = new THREE.Box3().setFromObject(modelRoot);
+          const sz = new THREE.Vector3();
+          box.getSize(sz);
+          document.getElementById('stat-bbox').textContent =
+            `${sz.x.toFixed(1)}×${sz.z.toFixed(1)}×${sz.y.toFixed(1)} m`;
+          document.getElementById('stat-tris').textContent =
+            Math.round(totalTris).toLocaleString();
+          document.getElementById('stat-size').textContent = cfg.sizeLabel;
+          document.getElementById('stat-tex').textContent = cfg.texLabel;
+
+          loaderBar.style.width = '100%';
+          setTimeout(() => loaderEl.classList.add('hidden'), 220);
+        },
+        (xhr) => {
+          if (xhr.total > 0) {
+            const pct = Math.min(98, Math.round((xhr.loaded / xhr.total) * 100));
+            loaderBar.style.width = `${pct}%`;
+            loaderSub.textContent = `已加载 ${(xhr.loaded / 1048576).toFixed(1)} / ${(xhr.total / 1048576).toFixed(1)} MB (${pct}%)`;
+          }
+        },
+        (err) => {
+          console.error('GLB Load Error:', err);
+          loaderSub.textContent = '模型加载失败，请检查控制台日志。';
+        }
+      );
+    }
+
+    // Default load: <200k Production Draco Level-10 version!
+    loadModelVariant('draco200k');
+
+    // -------------------------------------------------------------------------
+    // 6. Camera Preset Transitions (Exact 6-View Blueprint Alignment!)
+    // -------------------------------------------------------------------------
+    const VIEW_DIST = 290;
+    const VIEW_PRESETS = {
+      axon:  { pos: new THREE.Vector3(-168, 138, 236), up: new THREE.Vector3(0, 1, 0), orthoZoom: 0.90 },
+      front: { pos: new THREE.Vector3(0, 60, VIEW_DIST), up: new THREE.Vector3(0, 1, 0), orthoZoom: 1.02 },
+      rear:  { pos: new THREE.Vector3(0, 60, -VIEW_DIST), up: new THREE.Vector3(0, 1, 0), orthoZoom: 1.02 },
+      left:  { pos: new THREE.Vector3(-VIEW_DIST, 60, 0), up: new THREE.Vector3(0, 1, 0), orthoZoom: 1.02 },
+      right: { pos: new THREE.Vector3(VIEW_DIST, 60, 0), up: new THREE.Vector3(0, 1, 0), orthoZoom: 1.02 },
+      top:   { pos: new THREE.Vector3(0, 60 + VIEW_DIST, 0.05), up: new THREE.Vector3(0, 0, -1), orthoZoom: 1.15 },
+    };
+
+    let camAnim = null;
+    function goToView(viewKey, useOrthoHint = null) {
+      const preset = VIEW_PRESETS[viewKey];
+      if (!preset) return;
+
+      if (useOrthoHint !== null && useOrthoHint !== isOrtho) {
+        setProjection(useOrthoHint);
+      }
+
+      camAnim = {
+        startTime: performance.now(),
+        duration: 620,
+        fromPos: activeCam.position.clone(),
+        toPos: preset.pos.clone(),
+        fromTarget: controls.target.clone(),
+        toTarget: CENTER.clone(),
+        fromUp: activeCam.up.clone(),
+        toUp: preset.up.clone(),
+        fromZoom: orthoCam.zoom,
+        toZoom: preset.orthoZoom,
+      };
+
+      document.querySelectorAll('.view-btn').forEach((b) => {
+        b.classList.toggle('active', b.dataset.view === viewKey);
+      });
+    }
+
+    function setProjection(ortho) {
+      if (ortho === isOrtho) return;
+      const oldCam = activeCam;
+      isOrtho = ortho;
+      activeCam = isOrtho ? orthoCam : perspCam;
+
+      activeCam.position.copy(oldCam.position);
+      activeCam.up.copy(oldCam.up);
+      if (isOrtho) {
+        const dist = oldCam.position.distanceTo(controls.target);
+        const visibleH = 2 * dist * Math.tan(THREE.MathUtils.degToRad(perspCam.fov * 0.5));
+        orthoCam.zoom = (orthoHalfH * 2) / visibleH;
+        orthoCam.updateProjectionMatrix();
+      }
+
+      controls.object = activeCam;
+      renderPass.camera = activeCam;
+      controls.update();
+
+      document.getElementById('btn-proj-persp').classList.toggle('active', !isOrtho);
+      document.getElementById('btn-proj-ortho').classList.toggle('active', isOrtho);
+    }
+
+    // -------------------------------------------------------------------------
+    // 7. UI Event Bindings
+    // -------------------------------------------------------------------------
+    // 6-View Dock
+    document.querySelectorAll('.view-btn').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const key = btn.dataset.view;
+        // Pure orthographic for Front/Rear/Left/Right/Top blueprint views feels super crisp!
+        goToView(key, key !== 'axon');
+      });
+    });
+
+    // Keyboard shortcuts 1..6
+    window.addEventListener('keydown', (e) => {
+      const map = { '1': 'front', '2': 'rear', '3': 'left', '4': 'right', '5': 'top', '6': 'axon' };
+      if (map[e.key]) goToView(map[e.key], e.key !== '6');
+    });
+
+    // Model Variant Switcher (<200k Draco vs 740k Master)
+    document.querySelectorAll('[data-model]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        loadModelVariant(btn.dataset.model);
+      });
+    });
+
+    // Render Mode Switch
+    document.querySelectorAll('[data-render]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const mode = btn.dataset.render;
+        document.querySelectorAll('[data-render]').forEach((b) => b.classList.toggle('active', b === btn));
+        applyRenderMode(mode);
+      });
+    });
+
+    // Studio Background Theme
+    document.querySelectorAll('[data-theme]').forEach((btn) => {
+      btn.addEventListener('click', () => {
+        const theme = btn.dataset.theme;
+        document.querySelectorAll('[data-theme]').forEach((b) => b.classList.toggle('active', b === btn));
+        document.body.classList.toggle('theme-paper', theme === 'paper');
+        gridHelper.material.opacity = theme === 'paper' ? 0.18 : 0.28;
+      });
+    });
+
+    // Projection Buttons
+    document.getElementById('btn-proj-persp').addEventListener('click', () => setProjection(false));
+    document.getElementById('btn-proj-ortho').addEventListener('click', () => setProjection(true));
+
+    // Dimensions Toggle
+    const btnDims = document.getElementById('btn-dims');
+    btnDims.addEventListener('click', () => {
+      const next = !dimsGroup.visible;
+      dimsGroup.visible = next;
+      labelsLayer.classList.toggle('hidden', !next);
+      btnDims.classList.toggle('active', next);
+    });
+
+    // Reference Blueprint Card Toggle
+    const refCard = document.getElementById('ref-card');
+    const btnRef = document.getElementById('btn-ref');
+    btnRef.addEventListener('click', () => {
+      const show = refCard.classList.contains('hidden');
+      refCard.classList.toggle('hidden', !show);
+      btnRef.classList.toggle('active', show);
+    });
+    document.getElementById('ref-close').addEventListener('click', () => {
+      refCard.classList.add('hidden');
+      btnRef.classList.remove('active');
+    });
+    document.getElementById('ref-expand').addEventListener('click', () => {
+      refCard.classList.toggle('expanded');
+    });
+
+    // Auto Rotate
+    const btnSpin = document.getElementById('btn-spin');
+    btnSpin.addEventListener('click', () => {
+      controls.autoRotate = !controls.autoRotate;
+      btnSpin.classList.toggle('active', controls.autoRotate);
+    });
+
+    // Reset View
+    document.getElementById('btn-reset').addEventListener('click', () => {
+      controls.autoRotate = false;
+      btnSpin.classList.remove('active');
+      goToView('axon', false);
+    });
+
+    // Panel Collapse
+    document.getElementById('panel-toggle').addEventListener('click', () => {
+      document.getElementById('ctrl-panel').classList.toggle('collapsed');
+    });
+
+    // Sliders
+    const rngBloom = document.getElementById('rng-bloom');
+    const valBloom = document.getElementById('val-bloom');
+    rngBloom.addEventListener('input', () => {
+      const v = parseFloat(rngBloom.value);
+      bloomPass.strength = v;
+      valBloom.textContent = v.toFixed(2);
+    });
+
+    const rngExp = document.getElementById('rng-exp');
+    const valExp = document.getElementById('val-exp');
+    rngExp.addEventListener('input', () => {
+      const v = parseFloat(rngExp.value);
+      renderer.toneMappingExposure = v;
+      valExp.textContent = v.toFixed(2);
+    });
+
+    const rngLight = document.getElementById('rng-light');
+    const valLight = document.getElementById('val-light');
+    rngLight.addEventListener('input', () => {
+      const deg = parseFloat(rngLight.value);
+      lightRig.rotation.y = THREE.MathUtils.degToRad(deg - 35);
+      valLight.textContent = `${deg}°`;
+    });
+
+    // Cancel camera tween if user drags manually
+    controls.addEventListener('start', () => { camAnim = null; });
+
+    // Resize handling
+    window.addEventListener('resize', () => {
+      const w = window.innerWidth;
+      const h = window.innerHeight;
+      const asp = w / h;
+      perspCam.aspect = asp;
+      perspCam.updateProjectionMatrix();
+
+      orthoCam.left = -orthoHalfH * asp;
+      orthoCam.right = orthoHalfH * asp;
+      orthoCam.top = orthoHalfH;
+      orthoCam.bottom = -orthoHalfH;
+      orthoCam.updateProjectionMatrix();
+
+      renderer.setSize(w, h);
+      composer.setSize(w, h);
+    });
+
+    // -------------------------------------------------------------------------
+    // 8. Animation Loop
+    // -------------------------------------------------------------------------
+    function animate(now) {
+      requestAnimationFrame(animate);
+
+      if (camAnim) {
+        const t = Math.min(1, (now - camAnim.startTime) / camAnim.duration);
+        const ease = 1 - Math.pow(1 - t, 3);
+        activeCam.position.lerpVectors(camAnim.fromPos, camAnim.toPos, ease);
+        controls.target.lerpVectors(camAnim.fromTarget, camAnim.toTarget, ease);
+        activeCam.up.lerpVectors(camAnim.fromUp, camAnim.toUp, ease).normalize();
+        if (isOrtho) {
+          orthoCam.zoom = THREE.MathUtils.lerp(camAnim.fromZoom, camAnim.toZoom, ease);
+          orthoCam.updateProjectionMatrix();
+        }
+        if (t >= 1) camAnim = null;
+      }
+
+      controls.update();
+      updateProjectedLabels();
+      composer.render();
+    }
+    requestAnimationFrame(animate);
+  </script>
+</body>
+</html>

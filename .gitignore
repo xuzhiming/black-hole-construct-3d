@@ -1,0 +1,8 @@
+# Local dev workspace & heavy intermediate bake assets (preserved locally)
+__pycache__/
+*.pyc
+.DS_Store
+baked_textures/
+baked_textures_200k/
+web/
+*.blend1
