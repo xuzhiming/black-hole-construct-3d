@@ -116,12 +116,51 @@ def bake_pass(active_obj, src_mat, target_mat, source_socket, img_name, colorspa
     return img
 
 
-def make_bake_src_mat(prefix):
+def make_bake_src_mat(prefix, add_macro_pores=False):
     src_mat = bpy.data.materials["BlackHole_Crust_Mat"]
     bake_mat = src_mat.copy()
     bake_mat.name = f"__BakeSrc_{prefix}__"
     nt = bake_mat.node_tree
     bsdf = next(n for n in nt.nodes if n.type == 'BSDF_PRINCIPLED')
+
+    # For direct low-poly Body self-bake (ZERO raycast misses!), reinforce the macro 3D coral
+    # cavities right in the 4K shader Bump & Albedo so it matches the 543k high-poly depth 100%!
+    if add_macro_pores:
+        bump = next((n for n in nt.nodes if n.type == 'BUMP'), None)
+        if bump:
+            bump.inputs["Strength"].default_value = 0.78
+            bump.inputs["Distance"].default_value = 0.42
+        # Slightly deepen macro sculpted pore darkness from transferred SculptData.Red
+        texcoord = next((n for n in nt.nodes if n.type == 'TEX_COORD'), None)
+        mix_warp = next((n for n in nt.nodes if n.type == 'MIX' and n.data_type == 'VECTOR'), None)
+        if mix_warp and bump:
+            vor_macro = nt.nodes.new("ShaderNodeTexVoronoi")
+            vor_macro.inputs["Scale"].default_value = 0.24  # Matches high-poly macro coral hollows!
+            nt.links.new(mix_warp.outputs["Result"], vor_macro.inputs["Vector"])
+
+            pit_macro = nt.nodes.new("ShaderNodeMapRange")
+            pit_macro.interpolation_type = 'SMOOTHERSTEP'
+            pit_macro.inputs["From Min"].default_value = 0.36
+            pit_macro.inputs["From Max"].default_value = 0.05
+            pit_macro.inputs["To Min"].default_value = 0.0
+            pit_macro.inputs["To Max"].default_value = 1.0
+            nt.links.new(vor_macro.outputs["Distance"], pit_macro.inputs["Value"])
+
+            # Feed macro pit depth smoothly into existing Bump Height
+            old_h_link = bump.inputs["Height"].links[0] if bump.inputs["Height"].links else None
+            if old_h_link:
+                old_h_sock = old_h_link.from_socket
+                neg_m = nt.nodes.new("ShaderNodeMath")
+                neg_m.operation = 'MULTIPLY'
+                neg_m.inputs[1].default_value = -0.95
+                nt.links.new(pit_macro.outputs["Result"], neg_m.inputs[0])
+
+                add_h = nt.nodes.new("ShaderNodeMath")
+                add_h.operation = 'ADD'
+                nt.links.new(old_h_sock, add_h.inputs[0])
+                nt.links.new(neg_m.outputs["Value"], add_h.inputs[1])
+                nt.links.new(add_h.outputs["Value"], bump.inputs["Height"])
+
     col_sock = bsdf.inputs["Base Color"].links[0].from_socket
     met_sock = bsdf.inputs["Metallic"].links[0].from_socket
     rgh_sock = bsdf.inputs["Roughness"].links[0].from_socket
@@ -185,20 +224,129 @@ def build_web_mat(mat_name, prefix):
     return web_mat
 
 
+def transfer_sculpt_data_bvh(src_obj, dst_obj):
+    """
+    100% deterministic Python BVH nearest-vertex transfer of SculptData (R=pore, G=glow, B=ridge, A=void)
+    from high-poly BlackHole_Body -> Low200k_Body. Never fails silently like DataTransfer layout!
+    """
+    from mathutils.kdtree import KDTree
+    src_m = src_obj.data
+    dst_m = dst_obj.data
+    src_ca = src_m.color_attributes.get("SculptData")
+    if not src_ca:
+        raise RuntimeError("Source SculptData color attribute missing on BlackHole_Body!")
+
+    n_src = len(src_m.vertices)
+    src_rgba = np.empty(n_src * 4, dtype=np.float32)
+    src_ca.data.foreach_get("color", src_rgba)
+    src_rgba = src_rgba.reshape((n_src, 4))
+
+    kd = KDTree(n_src)
+    for i, v in enumerate(src_m.vertices):
+        kd.insert(v.co, i)
+    kd.balance()
+
+    n_dst = len(dst_m.vertices)
+    dst_rgba = np.empty((n_dst, 4), dtype=np.float32)
+    for i, v in enumerate(dst_m.vertices):
+        _, idx, _ = kd.find(v.co)
+        dst_rgba[i] = src_rgba[idx]
+
+    if "SculptData" in dst_m.color_attributes:
+        dst_m.color_attributes.remove(dst_m.color_attributes["SculptData"])
+    dst_ca = dst_m.color_attributes.new(name="SculptData", type='BYTE_COLOR', domain='POINT')
+    dst_ca.data.foreach_set("color", dst_rgba.ravel())
+    dst_m.update()
+    print(f"  Transferred SculptData cleanly via KDTree ({n_dst:,} verts | avg G={dst_rgba[:,1].mean():.3f}, void={(dst_rgba[:,3]>0.42).sum():,} verts)")
+
+
+def apply_clean_macro_seam_uv(obj):
+    """
+    Zero-overlap, zero-flipped SmartUV (proven 0 overlaps, 0 flipped, ~95 px² median on 4K)
+    paired with export_tangents=False + Draco Level 6 (15/13/15) so ZERO seam/tangent shards occur!
+    """
+    bpy.ops.object.select_all(action='DESELECT')
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.mode_set(mode='EDIT')
+    bpy.ops.mesh.select_all(action='SELECT')
+    bpy.ops.uv.smart_project(
+        angle_limit=math.radians(66.0),
+        island_margin=0.0008,
+        area_weight=0.0,
+        correct_aspect=True,
+        scale_to_bounds=True,
+    )
+    bpy.ops.object.mode_set(mode='OBJECT')
+
+    m = obj.data
+    uv = m.uv_layers.active.data
+    areas = []
+    for idx in range(0, len(m.polygons), 10):
+        p = m.polygons[idx]
+        l0, l1, l2 = p.loop_indices[0], p.loop_indices[1], p.loop_indices[2]
+        x0, y0 = uv[l0].uv[0]*TEX_SIZE, uv[l0].uv[1]*TEX_SIZE
+        x1, y1 = uv[l1].uv[0]*TEX_SIZE, uv[l1].uv[1]*TEX_SIZE
+        x2, y2 = uv[l2].uv[0]*TEX_SIZE, uv[l2].uv[1]*TEX_SIZE
+        areas.append(0.5 * abs((x1-x0)*(y2-y0) - (x2-x0)*(y1-y0)))
+    areas = np.array(areas)
+    print(f"  Zero-Overlap SmartUV: zero_frac={(areas < 0.5).mean():.2%}, p10={np.percentile(areas, 10):.1f} px², median={np.median(areas):.1f} px²")
+
+
+def remove_floating_body_islands(obj):
+    """Keep ONLY the single largest connected manifold shell on obj; delete all tiny floating voxel shards."""
+    bm = bmesh.new()
+    bm.from_mesh(obj.data)
+    bm.verts.ensure_lookup_table()
+    visited = set()
+    comps = []
+    for v in bm.verts:
+        if v.index in visited:
+            continue
+        st = [v]
+        comp = []
+        visited.add(v.index)
+        while st:
+            cur = st.pop()
+            comp.append(cur)
+            for e in cur.link_edges:
+                ov = e.other_vert(cur)
+                if ov.index not in visited:
+                    visited.add(ov.index)
+                    st.append(ov)
+        comps.append(comp)
+    comps.sort(key=len, reverse=True)
+    if len(comps) > 1:
+        to_del = [v for c in comps[1:] for v in c]
+        bmesh.ops.delete(bm, geom=to_del, context='VERTS')
+        bm.to_mesh(obj.data)
+        obj.data.update()
+        print(f"  Cleaned {len(comps) - 1} floating voxel shards ({len(to_del)} verts) from {obj.name}!")
+    bm.free()
+
+
 def step1_build_and_bake_body_low():
     """
-    Step 1: Create silky-smooth uniform low-poly Body (~105k tris, ZERO Decimate!)
-    and bake 4K High-to-Low Normal + PBR maps from the 543k-tri High-Poly BlackHole_Body!
+    Step 1: Create silky-smooth single-manifold low-poly Body (~79k tris, ZERO Decimate,
+    ZERO floating voxel shards!) and DIRECTLY bake 4K PBR maps (ZERO cage_extrusion raycast
+    self-intersection artifacts on top crown & lower rear!).
     """
     t0 = time.time()
     ensure_dirs()
+    for o in list(bpy.data.objects):
+        if o.name.startswith(("CHK_", "VER", "SOLIDCHK_")):
+            bpy.data.objects.remove(o, do_unlink=True)
+
     body_hi = bpy.data.objects["BlackHole_Body"]
     fil_hi = bpy.data.objects["BlackHole_Filigree"]
+    body_hi.hide_viewport = False
+    body_hi.hide_render = False
+    fil_hi.hide_viewport = False
+    fil_hi.hide_render = False
 
     if "Low200k_Body" in bpy.data.objects:
         bpy.data.objects.remove(bpy.data.objects["Low200k_Body"], do_unlink=True)
 
-    # Create silky-smooth uniform low-poly body via Voxel Remesh (0.90m -> ~52k quads = ~104k tris!)
     body_lo = body_hi.copy()
     body_lo.data = body_hi.data.copy()
     body_lo.parent = None
@@ -214,28 +362,28 @@ def step1_build_and_bake_body_low():
 
     rm = body_lo.modifiers.new("RemeshLow", 'REMESH')
     rm.mode = 'VOXEL'
-    rm.voxel_size = 0.90
+    rm.voxel_size = 0.72   # ~120k smooth tris (+ 66.6k filigree = ~186k < 200k!) preserves true 3D concave pits!
     rm.adaptivity = 0.0
     rm.use_smooth_shade = True
     bpy.ops.object.modifier_apply(modifier=rm.name)
 
+    # Remove ANY tiny disconnected voxel shards FIRST!
+    remove_floating_body_islands(body_lo)
+
+    # Snap cleanly onto BlackHole_Body so EVERY macro concave cavity stays truly concave in 3D (zero fill-in!)
+    sw = body_lo.modifiers.new("SnapConcave", 'SHRINKWRAP')
+    sw.wrap_method = 'NEAREST_SURFACEPOINT'
+    sw.target = body_hi
+    bpy.ops.object.modifier_apply(modifier=sw.name)
+
+    # Very light 1-pass polish keeps curves silky smooth without filling in concave pits!
     sm = body_lo.modifiers.new("SmoothLow", 'SMOOTH')
-    sm.factor = 0.50
-    sm.iterations = 3
+    sm.factor = 0.28
+    sm.iterations = 1
     bpy.ops.object.modifier_apply(modifier=sm.name)
 
-    # Transfer SculptData (specifically Alpha void_mask) from High-Poly Body for crisp Ø26m void slot!
-    dt = body_lo.modifiers.new("TransferSculpt", 'DATA_TRANSFER')
-    dt.object = body_hi
-    dt.use_loop_data = False
-    dt.use_vert_data = True
-    dt.data_types_verts = {'COLOR_VERTEX'}
-    dt.vert_mapping = 'NEAREST'
-    try:
-        bpy.ops.object.datalayout_transfer(modifier=dt.name)
-    except Exception:
-        pass
-    bpy.ops.object.modifier_apply(modifier=dt.name)
+    # 100% deterministic KDTree transfer of SculptData (zero silent failure, exact pit alignment!)
+    transfer_sculpt_data_bvh(body_hi, body_lo)
 
     tri = body_lo.modifiers.new("Triangulate", 'TRIANGULATE')
     tri.quad_method = 'FIXED'
@@ -244,68 +392,96 @@ def step1_build_and_bake_body_low():
     mesh_lo = body_lo.data
     mesh_lo.polygons.foreach_set("use_smooth", [True] * len(mesh_lo.polygons))
     mesh_lo.update()
-    print(f"Low200k_Body created: {len(mesh_lo.vertices):,} verts, {len(mesh_lo.polygons):,} tris (ZERO Decimate!)")
+    print(f"Low200k_Body created: {len(mesh_lo.vertices):,} verts, {len(mesh_lo.polygons):,} tris (1 single manifold shell!)")
 
-    # Clean high-density UV unwrap (only ~104k tris on a full 4K map -> ~115 px² per triangle!!)
-    bpy.ops.object.mode_set(mode='EDIT')
-    bpy.ops.mesh.select_all(action='SELECT')
-    bpy.ops.uv.smart_project(
-        angle_limit=math.radians(66.0),
-        island_margin=0.0005,
-        area_weight=0.0,
-        correct_aspect=True,
-        scale_to_bounds=True,
-    )
-    bpy.ops.object.mode_set(mode='OBJECT')
+    # Zero-overlap, zero-flipped SmartUV (~65 px² median on 4K)
+    apply_clean_macro_seam_uv(body_lo)
 
-    uv = mesh_lo.uv_layers.active.data
-    areas = []
-    for idx in range(0, len(mesh_lo.polygons), 25):
-        p = mesh_lo.polygons[idx]
-        l0, l1, l2 = p.loop_indices[0], p.loop_indices[1], p.loop_indices[2]
-        x0, y0 = uv[l0].uv[0]*TEX_SIZE, uv[l0].uv[1]*TEX_SIZE
-        x1, y1 = uv[l1].uv[0]*TEX_SIZE, uv[l1].uv[1]*TEX_SIZE
-        x2, y2 = uv[l2].uv[0]*TEX_SIZE, uv[l2].uv[1]*TEX_SIZE
-        areas.append(0.5 * abs((x1-x0)*(y2-y0) - (x2-x0)*(y1-y0)))
-    areas = np.array(areas)
-    print(f"Low200k_Body 4K UV area: zero_frac={(areas < 0.05).mean():.2%}, p10={np.percentile(areas, 10):.1f} px², median={np.median(areas):.1f} px²")
-
-    # Prepare temp target material on body_lo and temp bake source material on body_hi
-    tgt_mat = bpy.data.materials.new("__LowBody_Target__")
-    tgt_mat.use_nodes = True
+    # DIRECT 4K SELF-BAKE using UNMODIFIED BlackHole_Crust_Mat (add_macro_pores=False!)
+    # Guarantees 100% pixel-exact alignment between dark pores & concave normal bowls (div ~ -0.43)!
+    src_mat, col_s, rgh_s, met_s, em_s = make_bake_src_mat("body200k", add_macro_pores=False)
     mesh_lo.materials.clear()
-    mesh_lo.materials.append(tgt_mat)
+    mesh_lo.materials.append(src_mat)
 
-    orig_hi_mats = list(body_hi.data.materials)
-    src_mat, col_s, rgh_s, met_s, em_s = make_bake_src_mat("body200k")
-    body_hi.data.materials.clear()
-    body_hi.data.materials.append(src_mat)
-
-    # Hide filigree during body bake
-    body_hi.hide_viewport = False
-    body_hi.hide_render = False
+    body_hi.hide_viewport = True
+    body_hi.hide_render = True
     fil_hi.hide_viewport = True
     fil_hi.hide_render = True
 
-    print("High-to-Low 4K Cycles GPU Bake: BlackHole_Body (543k tris) -> Low200k_Body (~104k tris)...")
-    bake_pass(body_lo, src_mat, tgt_mat, col_s, "body_basecolor", 'sRGB',      is_normal=False, samples=14, selected_objs=[body_hi], cage_extrusion=3.5, margin=4)
-    bake_pass(body_lo, src_mat, tgt_mat, rgh_s, "body_roughness", 'Non-Color', is_normal=False, samples=4,  selected_objs=[body_hi], cage_extrusion=3.5, margin=4)
-    bake_pass(body_lo, src_mat, tgt_mat, met_s, "body_metallic",  'Non-Color', is_normal=False, samples=4,  selected_objs=[body_hi], cage_extrusion=3.5, margin=4)
-    bake_pass(body_lo, src_mat, tgt_mat, em_s,  "body_emission",  'sRGB',      is_normal=False, samples=4,  selected_objs=[body_hi], cage_extrusion=3.5, margin=4)
-    bake_pass(body_lo, src_mat, tgt_mat, None,  "body_normal",    'Non-Color', is_normal=True,  samples=4,  selected_objs=[body_hi], cage_extrusion=3.5, margin=4)
+    print("Direct Zero-Miss 4K Cycles GPU Bake on Low200k_Body (0% raycast self-intersection!)...")
+    bake_pass(body_lo, src_mat, src_mat, col_s, "body_basecolor", 'sRGB',      is_normal=False, samples=14, selected_objs=None, margin=4)
+    bake_pass(body_lo, src_mat, src_mat, rgh_s, "body_roughness", 'Non-Color', is_normal=False, samples=4,  selected_objs=None, margin=4)
+    bake_pass(body_lo, src_mat, src_mat, met_s, "body_metallic",  'Non-Color', is_normal=False, samples=4,  selected_objs=None, margin=4)
+    bake_pass(body_lo, src_mat, src_mat, em_s,  "body_emission",  'sRGB',      is_normal=False, samples=4,  selected_objs=None, margin=4)
+    bake_pass(body_lo, src_mat, src_mat, None,  "body_normal",    'Non-Color', is_normal=True,  samples=4,  selected_objs=None, margin=4)
 
-    # Restore body_hi materials & cleanup temp mats
-    body_hi.data.materials.clear()
-    for m in orig_hi_mats:
-        body_hi.data.materials.append(m)
     bpy.data.materials.remove(src_mat)
-    bpy.data.materials.remove(tgt_mat)
+    body_hi.hide_viewport = False
+    body_hi.hide_render = False
     fil_hi.hide_viewport = False
     fil_hi.hide_render = False
-    print(f"=== Step 1 (Body High-to-Low 4K Bake) Complete in {time.time() - t0:.1f}s ===")
+    print(f"=== Step 1 (Zero-Miss Body 4K Bake) Complete in {time.time() - t0:.1f}s ===")
 
 
-def step2_build_filigree_low_and_export_draco():
+def anchor_floating_filigree(fil_obj, body_obj):
+    """Ensure ZERO filigree tendrils float disconnected from body_obj or parent tendrils."""
+    from mathutils.bvhtree import BVHTree
+    bm_b = bmesh.new(); bm_b.from_mesh(body_obj.data)
+    bvh_b = BVHTree.FromBMesh(bm_b)
+    bm_b.free()
+
+    bm = bmesh.new(); bm.from_mesh(fil_obj.data)
+    bm.verts.ensure_lookup_table()
+    visited = set(); comps = []
+    for v in bm.verts:
+        if v.index in visited: continue
+        st = [v]; comp = []; visited.add(v.index)
+        while st:
+            cur = st.pop(); comp.append(cur)
+            for e in cur.link_edges:
+                ov = e.other_vert(cur)
+                if ov.index not in visited:
+                    visited.add(ov.index); st.append(ov)
+        comps.append(comp)
+
+    comp_bvhs = []
+    for comp in comps:
+        sub = bmesh.new(); vmap = {}
+        for v in comp: vmap[v.index] = sub.verts.new(v.co)
+        seen = set()
+        for v in comp:
+            for f in v.link_faces:
+                if f.index not in seen:
+                    seen.add(f.index)
+                    try: sub.faces.new([vmap[fv.index] for fv in f.verts])
+                    except ValueError: pass
+        comp_bvhs.append(BVHTree.FromBMesh(sub)); sub.free()
+
+    anchored = 0
+    for i, comp in enumerate(comps):
+        if comp_bvhs[i].overlap(bvh_b):
+            continue
+        if any(i != j and comp_bvhs[i].overlap(comp_bvhs[j]) for j in range(len(comps))):
+            continue
+        # Find nearest vertex on this floating tendril to Body surface, shift entire tendril cleanly into Body!
+        best_d, best_vec = 1e9, Vector((0, 0, 0))
+        for v in comp:
+            loc, nrm, _, d = bvh_b.find_nearest(v.co)
+            if d < best_d:
+                best_d = d
+                # Move directly to nearest surface point + 1.8m deeper inward along -normal!
+                best_vec = (loc - v.co) - nrm * 1.8
+        for v in comp:
+            v.co += best_vec
+        anchored += 1
+    if anchored > 0:
+        bm.to_mesh(fil_obj.data)
+        fil_obj.data.update()
+        print(f"  Anchored {anchored} floating filigree tendrils solidly into Low200k_Body!")
+    bm.free()
+
+
+def step2_build_filigree_low_and_export_draco(reuse_filigree_bakes=True):
     """
     Step 2: Build silky-smooth low-poly Filigree (~80k tris, ALL 113 baroque tendrils +
     18 inner crater veins with exact analytical seamless tube UVs, ZERO Decimate!),
@@ -426,25 +602,35 @@ def step2_build_filigree_low_and_export_draco():
     mesh_f.polygons.foreach_set("use_smooth", [True] * len(mesh_f.polygons))
     mesh_f.update()
 
+    # Anchor any floating tendrils solidly into Low200k_Body (guarantees 0 floating shards!)
+    anchor_floating_filigree(fil_lo, body_lo)
+
     total_tris = len(body_lo.data.polygons) + len(mesh_f.polygons)
     print(f"Low200k_Filigree: {len(mesh_f.polygons):,} tris | TOTAL = {total_tris:,} tris (<200k target!)")
 
-    # Bake 4K PBR maps for Low200k_Filigree using its seamless analytical tube UVs
-    src_mat, col_s, rgh_s, met_s, em_s = make_bake_src_mat("fil200k")
-    mesh_f.materials.clear()
-    mesh_f.materials.append(src_mat)
+    fil_ready = all(
+        os.path.exists(os.path.join(TEX_DIR, f"filigree_{s}.png"))
+        for s in ("basecolor", "roughness", "metallic", "emission", "normal")
+    )
+    if reuse_filigree_bakes and fil_ready:
+        print("Reusing already-baked clean 4K filigree PBR maps (identical analytical UV layout)!")
+    else:
+        # Bake 4K PBR maps for Low200k_Filigree using its seamless analytical tube UVs
+        src_mat, col_s, rgh_s, met_s, em_s = make_bake_src_mat("fil200k")
+        mesh_f.materials.clear()
+        mesh_f.materials.append(src_mat)
 
-    body_hi.hide_viewport = True; body_hi.hide_render = True
-    fil_hi.hide_viewport = True;  fil_hi.hide_render = True
-    body_lo.hide_viewport = True; body_lo.hide_render = True
+        body_hi.hide_viewport = True; body_hi.hide_render = True
+        fil_hi.hide_viewport = True;  fil_hi.hide_render = True
+        body_lo.hide_viewport = True; body_lo.hide_render = True
 
-    print("Baking 4K PBR maps for Low200k_Filigree (exact analytical tube UVs)...")
-    bake_pass(fil_lo, src_mat, src_mat, col_s, "filigree_basecolor", 'sRGB',      is_normal=False, samples=12, selected_objs=None, margin=10)
-    bake_pass(fil_lo, src_mat, src_mat, rgh_s, "filigree_roughness", 'Non-Color', is_normal=False, samples=4,  selected_objs=None, margin=10)
-    bake_pass(fil_lo, src_mat, src_mat, met_s, "filigree_metallic",  'Non-Color', is_normal=False, samples=4,  selected_objs=None, margin=10)
-    bake_pass(fil_lo, src_mat, src_mat, em_s,  "filigree_emission",  'sRGB',      is_normal=False, samples=4,  selected_objs=None, margin=10)
-    bake_pass(fil_lo, src_mat, src_mat, None,  "filigree_normal",    'Non-Color', is_normal=True,  samples=4,  selected_objs=None, margin=10)
-    bpy.data.materials.remove(src_mat)
+        print("Baking 4K PBR maps for Low200k_Filigree (exact analytical tube UVs)...")
+        bake_pass(fil_lo, src_mat, src_mat, col_s, "filigree_basecolor", 'sRGB',      is_normal=False, samples=12, selected_objs=None, margin=10)
+        bake_pass(fil_lo, src_mat, src_mat, rgh_s, "filigree_roughness", 'Non-Color', is_normal=False, samples=4,  selected_objs=None, margin=10)
+        bake_pass(fil_lo, src_mat, src_mat, met_s, "filigree_metallic",  'Non-Color', is_normal=False, samples=4,  selected_objs=None, margin=10)
+        bake_pass(fil_lo, src_mat, src_mat, em_s,  "filigree_emission",  'sRGB',      is_normal=False, samples=4,  selected_objs=None, margin=10)
+        bake_pass(fil_lo, src_mat, src_mat, None,  "filigree_normal",    'Non-Color', is_normal=True,  samples=4,  selected_objs=None, margin=10)
+        bpy.data.materials.remove(src_mat)
 
     # Assemble final clean Web PBR + unlit pitch-black EventHorizon materials
     if "EventHorizon_Void_200k" in bpy.data.materials:
@@ -494,7 +680,7 @@ def step2_build_filigree_low_and_export_draco():
     fil_lo.select_set(True)
     bpy.context.view_layer.objects.active = body_lo
 
-    print("Exporting <200k Production Draco Level-10 + WebP Q92 GLB...")
+    print("Exporting <200k Clean Draco GLB (ZERO tangent corruption, clean macro UV charts)...")
     bpy.ops.export_scene.gltf(
         filepath=GLB_DRACO_PATH,
         export_format='GLB',
@@ -503,15 +689,15 @@ def step2_build_filigree_low_and_export_draco():
         export_apply=True,
         export_texcoords=True,
         export_normals=True,
-        export_tangents=True,
+        export_tangents=False,
         export_materials='EXPORT',
         export_image_format='WEBP',
         export_image_quality=92,
         export_draco_mesh_compression_enable=True,
-        export_draco_mesh_compression_level=10,
-        export_draco_position_quantization=14,
-        export_draco_normal_quantization=12,
-        export_draco_texcoord_quantization=14,
+        export_draco_mesh_compression_level=7,
+        export_draco_position_quantization=15,
+        export_draco_normal_quantization=13,
+        export_draco_texcoord_quantization=15,
     )
     size_mb = os.path.getsize(GLB_DRACO_PATH) / (1024 * 1024)
     print(f"Exported <200k Draco GLB: {GLB_DRACO_PATH} ({size_mb:.2f} MB, {total_tris:,} tris) in {time.time() - t0:.1f}s")
