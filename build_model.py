@@ -122,17 +122,26 @@ def build_main_shell(name="Main_Shell_Raw", n_s=150, n_theta=210):
     front_s2 = fluid_wave(11.0 * TH - 0.38 * R + 1.0)
     rear_s1  = fluid_wave(3.0 * TH + 0.34 * R + 0.5 * np.cos(TH))
     rear_s2  = fluid_wave(6.0 * TH + 0.52 * R)
-    # Smooth fluid spiral filaments inside the glowing magenta crater!
-    funnel_ribs = np.sin(16.0 * TH - 0.42 * R)
+
+    # TRUE 3D INWARD-SPIRALING VORTEX RIPPLES sculpted directly into the 18m concave crater funnel!
+    # Logarithmic spiral winds tighter and tighter as radius contracts from Ø40m -> Ø26m!
+    r_ratio = np.maximum(0.05, (R - R_VOID) / (R_CRATER - R_VOID))
+    log_r = np.log(r_ratio + 0.14)
+    # 5-arm bold sweeping inward spiral + concentric contracting 3D ripples + fine vortex striations
+    funnel_spiral_arms = np.sin(5.0 * TH + 9.5 * log_r)
+    funnel_ripples     = np.sin(16.0 * log_r + 2.0 * TH)
+    funnel_fine        = np.sin(13.0 * TH + 15.0 * log_r)
+    funnel_vortex_3d   = 1.15 * funnel_spiral_arms + 0.65 * funnel_ripples + 0.32 * funnel_fine
 
     disp_r = (
         front_mask * (1.9 * front_s1 + 0.65 * front_s2)
         + rear_mask * (1.5 * rear_s1 + 0.60 * rear_s2)
+        + funnel_mask * (0.72 * funnel_vortex_3d)
     )
     disp_y = (
         front_mask * (-2.0 * front_s1 - 0.70 * front_s2)
         + rear_mask * (2.6 * rear_s1 + 0.90 * rear_s2)
-        + funnel_mask * (-0.75 * funnel_ribs)
+        + funnel_mask * (-1.35 * funnel_vortex_3d)
     )
 
     X = X + disp_r * cos_t
@@ -716,24 +725,49 @@ def build_surface_strata_and_crater_veins():
             f"Top_Strata_{k}", pts, radii, n_seg=14, flutes=4, flute_amp=0.09, twist=1.5, oval=1.38
         ))
 
-    # 4. Smooth Dark Obsidian Inner Crater Spiral Veins (flowing cleanly down into Ø26m void!)
-    for k in range(18):
-        th0 = 2.0 * math.pi * k / 18.0
+    # 4. DRAMATIC 3D INWARD-SPIRALING VORTEX ARMS & CONCENTRIC RIPPLE RINGS INSIDE THE Ø40m -> Ø26m FUNNEL!
+    # 20 multi-turn logarithmic inward-swirling 3D vortex ridges spiraling ~155° into the Ø26m abyss!
+    for k in range(20):
+        th0 = 2.0 * math.pi * k / 20.0
         pts, radii = [], []
-        for i in range(28):
-            u = i / 27.0
-            th = th0 + u * 0.95 + 0.10 * math.sin(k * 2.1 + u * 4.0)
-            r = (R_CRATER + 2.4) - (R_CRATER + 2.4 - R_VOID) * (u ** 0.85)
+        for i in range(36):
+            u = i / 35.0  # u=0 at outer Ø40m lip -> u=1 at inner Ø26m pitch-black void
+            # Tightening inward logarithmic spiral twist (~155° sweep!)
+            th = th0 - 2.70 * (u ** 1.28) + 0.08 * math.sin(k * 2.1 + u * 6.0)
+            r = (R_CRATER + 2.2) - (R_CRATER + 2.2 - R_VOID + 0.2) * (u ** 0.86)
             y_lip = -22.2 + 11.8 * (math.cos(th) ** 2)
             y_th  = -4.0 + 2.0 * (math.cos(th) ** 2)
-            y = y_lip + (y_th - y_lip) * (u ** 1.12) - 0.50 * math.sin(u * math.pi)
+            # Add subtle 3D ripple undulation along each inward spiral arm!
+            ripple_y = -0.55 * math.sin(u * math.pi * 5.0 + k * 0.6) * math.sin(u * math.pi)
+            y = y_lip + (y_th - y_lip) * (u ** 1.12) - 0.45 * math.sin(u * math.pi) + ripple_y
             x = HOLE_CX + r * math.cos(th)
             z = HOLE_CZ + r * math.sin(th)
             pts.append((x, y, z))
-            rad = 0.36 + 0.88 * (1.0 - 0.70 * u) * (math.sin(u * math.pi) ** 0.5 + 0.22)
+            rad = 0.30 + 0.82 * (1.0 - 0.68 * u) * (math.sin(u * math.pi) ** 0.45 + 0.22)
             radii.append(rad)
         crater_veins.append(create_smooth_fluid_tendril(
-            f"Crater_DarkVein_{k}", pts, radii, n_seg=12, flutes=3, flute_amp=0.08, twist=1.2, oval=1.32
+            f"Crater_InwardVortexArm_{k}", pts, radii, n_seg=12, flutes=3, flute_amp=0.08, twist=1.6, oval=1.35
+        ))
+
+    # 3 continuous 3D inward-spiraling ripple coils hugging the recessed concave funnel walls!
+    for c_idx in range(3):
+        th_offset = c_idx * (2.0 * math.pi / 3.0)
+        pts, radii = [], []
+        n_coil = 72
+        for i in range(n_coil):
+            u = i / (n_coil - 1)  # spirals 1.65 full turns inward from Ø40m -> Ø26m!
+            th = th_offset - u * (3.3 * math.pi)
+            r = (R_CRATER + 0.6) - (R_CRATER + 0.6 - R_VOID - 0.2) * (u ** 0.92)
+            y_lip = -22.2 + 11.8 * (math.cos(th) ** 2)
+            y_th  = -4.0 + 2.0 * (math.cos(th) ** 2)
+            y = y_lip + (y_th - y_lip) * (u ** 1.10) - 0.50 * math.sin(u * math.pi)
+            x = HOLE_CX + r * math.cos(th)
+            z = HOLE_CZ + r * math.sin(th)
+            pts.append((x, y, z))
+            rad = 0.42 + 0.68 * math.sin(u * math.pi) ** 0.55 * (1.0 - 0.45 * u)
+            radii.append(rad)
+        crater_veins.append(create_smooth_fluid_tendril(
+            f"Crater_SpiralRippleCoil_{c_idx}", pts, radii, n_seg=12, flutes=3, flute_amp=0.07, twist=2.0, oval=1.30
         ))
 
     return body_ribs, crater_veins
@@ -870,16 +904,18 @@ def sculpt_smooth_fluid_with_deep_pores(obj, is_filigree=False):
                 - 0.90 * pit2 + 0.14 * rim2
             )
 
-        # Smooth flowing glowing fissures inside the crater funnel
+        # Inward-spiraling logarithmic purple vortex ripples aligned 100% with the 3D sculpted funnel waves!
         if cm > 0.001:
             ai = float(ang_arr[i])
             rhi = float(rh_arr[i])
-            f1 = math.sin(22.0 * ai - 0.58 * rhi + 2.2 * n2)
-            f2 = math.sin(38.0 * ai - 0.92 * rhi + 1.5 * n1)
-            crack1 = (1.0 - abs(f1)) ** 2.6
-            crack2 = (1.0 - abs(f2)) ** 2.2
-            fissure = min(1.0, 0.78 * crack1 + 0.42 * crack2)
-            d_crater = 0.0 if is_filigree else (-0.55 * fissure + 0.25 * (1.0 - fissure))
+            rr = max(0.05, (rhi - R_VOID) / (R_CRATER - R_VOID))
+            lr = math.log(rr + 0.14)
+            # Synchronized 5-arm inward spiral + concentric inward ripples + fine swirl filaments!
+            s_arm  = 0.5 + 0.5 * math.sin(5.0 * ai + 9.5 * lr + 1.4 * n2)
+            s_ring = 0.5 + 0.5 * math.sin(16.0 * lr + 2.0 * ai + 1.2 * n1)
+            s_fine = 0.5 + 0.5 * math.sin(13.0 * ai + 15.0 * lr + 1.8 * n2)
+            fissure = min(1.0, 0.58 * (s_arm ** 1.8) + 0.42 * (s_ring ** 2.0) + 0.28 * (s_fine ** 2.2))
+            d_crater = 0.0 if is_filigree else (-0.45 * fissure + 0.22 * (1.0 - fissure))
         else:
             fissure = 0.0
             d_crater = 0.0
