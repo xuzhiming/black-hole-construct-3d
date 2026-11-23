@@ -602,6 +602,19 @@ def step2_build_filigree_low_and_export_draco(reuse_filigree_bakes=True):
     mesh_f.polygons.foreach_set("use_smooth", [True] * len(mesh_f.polygons))
     mesh_f.update()
 
+    # Guarantee 100% right-handed POSITIVE UV winding on Low200k_Filigree (fixes inverted convex pores in Three.js!)
+    uv_f = mesh_f.uv_layers.active.data
+    neg_cnt = 0
+    for p in mesh_f.polygons:
+        l0, l1, l2 = p.loop_indices[0], p.loop_indices[1], p.loop_indices[2]
+        u0, v0 = uv_f[l0].uv; u1, v1 = uv_f[l1].uv; u2, v2 = uv_f[l2].uv
+        if (u1 - u0) * (v2 - v0) - (u2 - u0) * (v1 - v0) < 0:
+            neg_cnt += 1
+    if neg_cnt > len(mesh_f.polygons) * 0.5:
+        for luv in uv_f:
+            luv.uv[1] = 1.0 - luv.uv[1]
+        print(f"  Flipped Filigree V-axis to enforce positive UV winding (was {neg_cnt:,} negative tris -> now 0!).")
+
     # Anchor any floating tendrils solidly into Low200k_Body (guarantees 0 floating shards!)
     anchor_floating_filigree(fil_lo, body_lo)
 

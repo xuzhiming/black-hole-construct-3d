@@ -267,14 +267,14 @@ def create_smooth_fluid_tendril(
     vert_uv_idx[v_end] = (1.0, 0.5)
 
     for f in bm.faces:
-        # Detect seam wrap (j=n_seg-1 to j=0) cleanly per face
         vs_face = [vert_uv_idx[l.vert][1] for l in f.loops]
         wraps = (max(vs_face) - min(vs_face)) > 0.5
         for l in f.loops:
             u_c, v_c = vert_uv_idx[l.vert]
             if wraps and v_c < 0.25:
                 v_c = 1.0
-            l[uv_layer].uv = (u_c, v_c)
+            # Right-handed positive UV winding (1.0 - v_c) so normal maps NEVER invert when tangents are computed!
+            l[uv_layer].uv = (u_c, 1.0 - v_c)
 
     mesh = bpy.data.meshes.new(name)
     bm.to_mesh(mesh)
